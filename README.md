@@ -62,7 +62,7 @@ To streamline the evaluation process, each protocol sub-directory contains a ded
 
 ### 1. Pull the Docker Image
 
-To ensure a consistent environment with all required Tamarin binaries and dependencies installed, pull the pre-configured Docker image.
+To ensure a consistent environment with all required Tamarin binaries and dependencies installed, pull the pre-configured Docker image, **[hafeez2003/tamarin-cross-verification:v1.0](https://hub.docker.com/r/hafeez2003/tamarin-cross-verification)**.
 
 ```bash
 docker pull hafeez2003/tamarin-cross-verification:v1.0
