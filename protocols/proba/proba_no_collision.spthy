@@ -1,0 +1,43 @@
+theory Proba_PK_No_Collision
+begin
+
+functions: pk/1, enc/3, dec/2, H/2, Nil/0
+
+equations:
+    dec(enc(m, pk(sk), seed), sk) = m
+
+restriction Equality:
+    "All x y #i. Eq(x,y) @ #i ==> x = y"
+
+rule Setup:
+    [ Fr(~s) ]
+  --[ ]->
+    [ !Sk(~s), Out(pk(~s)) ]
+
+rule Process_Send:
+    let
+        ct = enc(x, pk(~s), ~a)
+        h1 = H(x, Nil)
+        h = H(dec(ct, ~s), h1) 
+    in
+    [ !Sk(~s), In(x), Fr(~a) ]
+  --[ CipherTagSent(x, h) ]->
+    [ 
+      Out(ct), 
+      Out(h), 
+      St_Wait(~s, x, h) 
+    ]
+
+rule Process_Receive:
+    [ St_Wait(~s, x, h), In(hin) ]
+  --[ 
+      Eq(h, hin), 
+      CipherTagAccepted(x, hin) 
+    ]->
+    [ ]
+
+lemma tag_unforgeability:
+    "All x h #i. CipherTagAccepted(x, h) @ #i
+     ==> (Ex #j. CipherTagSent(x, h) @ #j & #j < #i)"
+
+end

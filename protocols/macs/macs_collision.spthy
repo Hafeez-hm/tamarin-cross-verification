@@ -1,0 +1,50 @@
+theory MACs_Collision
+begin
+
+functions: H/2, Nil/0, CPcol1/2, CPcol2/2
+
+equations:
+    H(CPcol1(h1, h2), h1) = H(CPcol2(h1, h2), h2)
+
+rule Generate_Collision_Prefixes:
+    [ In(p1), In(p2) ]
+  --[ GenCol() ]->
+    [ Out(CPcol1(H(p1, Nil), H(p2, Nil))), Out(CPcol2(H(p1, Nil), H(p2, Nil))) ]
+
+restriction One_Collision_Only:
+    "All #i #j. GenCol() @ #i & GenCol() @ #j ==> #i = #j"
+
+rule Setup_Key:
+    [ Fr(~k) ]
+  --[ ]->
+    [ !Key(~k) ]
+
+rule Sender:
+    let
+        h1 = H(~k, Nil)
+        tag = H(x, h1)
+    in
+    [ !Key(~k), In(x) ] 
+  --[ MacSent(x, tag) ]->
+    [ Out( <x, tag> ) ] 
+
+rule Receiver:
+    let
+        h1 = H(~k, Nil)
+        expected = H(x, h1)
+    in
+    [ !Key(~k), In( <x, m> ) ] // in(c, (x, m: bitstring))
+  --[ 
+      Eq(expected, m), // Mirrors: if equal_hash(expected, m) then
+      MacAccepted(x, m) 
+    ]->
+    [ Out(x) ] // out(c2, x)
+
+restriction Equality:
+    "All x y #i. Eq(x,y) @ #i ==> x = y"
+
+lemma mac_unforgeability:
+    "All x m #i. MacAccepted(x, m) @ #i
+     ==> (Ex #j. MacSent(x, m) @ #j & #j < #i)"
+
+end

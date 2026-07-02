@@ -1,0 +1,257 @@
+theory IKEv2_Simplified_No_Collision
+begin
+
+builtins: diffie-hellman, symmetric-encryption, signing
+functions: H/2, Nil/0, MAC/2, KDF/3
+
+rule Register_pk:
+    [ Fr(~sk) ]
+  --[ KeyGen($A) ]->
+    [ !Ltk($A, ~sk), !Pk($A, pk(~sk)), Out(pk(~sk)) ]
+
+rule Reveal_ltk:
+    [ !Ltk($A, sk) ]
+  --[ Dishonest($A) ]->
+    [ Out(sk) ]
+
+rule Init_A_1:
+    [ Fr(~x), Fr(~nA), Fr(~sA), !Ltk($A, skA), !Pk($B, pkB) ]
+  --[ Neq($A, $B) ]->
+    [ 
+      Out( <~sA, ~nA, 'g'^~x> ), 
+      St_A_1($A, $B, skA, pkB, ~x, ~nA, ~sA, <~sA, ~nA, 'g'^~x>) 
+    ]
+
+rule Init_A_2_NoCookie:
+    let
+        m1 = m1_prime // Defaults back to original m1
+        k1 = KDF(gy_in^~x, <~nA, nB>, '1')
+        k2 = KDF(gy_in^~x, <~nA, nB>, '2')
+        kA = KDF(gy_in^~x, <~nA, nB>, '3')
+        kB = KDF(gy_in^~x, <~nA, nB>, '4')
+
+        macA = MAC(pk(skA), kA)
+        macB = MAC(pkB, kB)
+
+        // MDH Transcript: (sA, (nA, (exp(g,x), (nB, macA))))
+        h1 = H(~sA, Nil)
+        h2 = H(~nA, h1)
+        h3 = H('g'^~x, h2)
+        h4 = H(nB, h3)
+        H_prime = H(macA, h4)
+
+        sigA = sign(H_prime, skA)
+        cipher = senc(<pk(skA), sigA>, k1)
+    in
+    [ 
+      St_A_1($A, $B, skA, pkB, ~x, ~nA, ~sA, m1_prime),
+      In( mC ), 
+      In( <sB, nB, gy_in> ) 
+    ]
+  --[ 
+      Neq($A, $B), Neq(gy_in, 'g'), NotCol(gy_in),
+      InitA($A, $B, <~nA, nB>, <m1, nB>, H_prime, H_prime),
+      InitA2($A, ~sA)
+    ]->
+    [ 
+      Out( cipher ), 
+      St_A_2($A, $B, skA, pkB, ~x, ~nA, ~sA, m1, 'true', sB, nB, gy_in, k1, k2, kA, kB, macA, macB, H_prime) 
+    ]
+
+rule Init_A_2_WithCookie:
+    let
+        m1 = <ck, ~sA, ~nA, 'g'^~x> // Cookie gets prefixed
+        k1 = KDF(gy_in^~x, <~nA, nB>, '1')
+        k2 = KDF(gy_in^~x, <~nA, nB>, '2')
+        kA = KDF(gy_in^~x, <~nA, nB>, '3')
+        kB = KDF(gy_in^~x, <~nA, nB>, '4')
+
+        macA = MAC(pk(skA), kA)
+        macB = MAC(pkB, kB)
+
+        // MDH Transcript: (cookie, (sA, (nA, (exp(g,x), (nB, macA)))))
+        h1 = H(ck, Nil)
+        h2 = H(~sA, h1)
+        h3 = H(~nA, h2)
+        h4 = H('g'^~x, h3)
+        h5 = H(nB, h4)
+        H_prime = H(macA, h5)
+
+        sigA = sign(H_prime, skA)
+        cipher = senc(<pk(skA), sigA>, k1)
+    in
+    [ 
+      St_A_1($A, $B, skA, pkB, ~x, ~nA, ~sA, m1_prime),
+      In( <'SA_INIT', ck> ), 
+      In( <sB, nB, gy_in> ) 
+    ]
+  --[ 
+      Neq($A, $B), Neq(gy_in, 'g'), NotCol(gy_in),
+      InitA($A, $B, <~nA, nB>, <m1, nB>, H_prime, H_prime),
+      InitA2($A, ~sA)
+    ]->
+    [ 
+      Out( cipher ), 
+      St_A_2($A, $B, skA, pkB, ~x, ~nA, ~sA, m1, 'false', sB, nB, gy_in, k1, k2, kA, kB, macA, macB, H_prime) 
+    ]
+
+rule Init_A_3:
+    let
+        // Reconstruct B's transcript (sB, (nB, (gy, (nA, macB))))
+        hB1 = H(sB, Nil)
+        hB2 = H(nB, hB1)
+        hB3 = H(gy, hB2)
+        hB4 = H(~nA, hB3)
+        hB_prime = H(macB, hB4)
+    in
+    [ 
+      St_A_2($A, $B, skA, pkB, ~x, ~nA, ~sA, m1, cookie_status, sB, nB, gy, k1, k2, kA, kB, macA, macB, H_prime),
+      In( senc(<pkB, sigB>, k2) )
+    ]
+  --[ 
+      Eq(verify(sigB, hB_prime, pkB), true),
+      SanityA(cookie_status, <m1, <sB, nB, gy>>), 
+      AcceptA($A, $B, <~nA, nB>, <m1, <sB, nB, gy>>, H_prime),
+      SessionKeyA($A, $B, k1)
+    ]->
+    [ ]
+
+rule Resp_B_1:
+    [ In( m1_prime ), Fr(~ck), !Ltk($B, skB), !Pk($A, pkA) ]
+  --[ Neq($A, $B) ]->
+    [ 
+      Out( ~ck ), 
+      St_B_1($B, $A, skB, pkA, m1_prime, ~ck) 
+    ]
+
+rule Resp_B_2_NoCookie:
+    let
+        m1 = <sA_in, nA_in, gx_in> // Extracted from m1_prime
+        m2 = <~sB, ~nB, 'g'^~y>
+        k1 = KDF(gx_in^~y, <nA_in, ~nB>, '1')
+        k2 = KDF(gx_in^~y, <nA_in, ~nB>, '2')
+        kA = KDF(gx_in^~y, <nA_in, ~nB>, '3')
+        kB = KDF(gx_in^~y, <nA_in, ~nB>, '4')
+
+        macA = MAC(pkA, kA)
+        macB = MAC(pk(skB), kB)
+
+        h1 = H(sA_in, Nil)
+        h2 = H(nA_in, h1)
+        h3 = H(gx_in, h2)
+        h4 = H(~nB, h3)
+        H_prime = H(macA, h4)
+    in
+    [ 
+      St_B_1($B, $A, skB, pkA, <sA_in, nA_in, gx_in>, ~ck),
+      In( 'false' ), 
+      In( mC ), 
+      Fr(~y), Fr(~nB), Fr(~sB) 
+    ]
+  --[ 
+      Neq($A, $B), Neq(gx_in, 'g'), NotCol(gx_in),
+      InitB($B, $A, <nA_in, ~nB>, < <sA_in, nA_in, gx_in>, ~nB>, H_prime) 
+    ]->
+    [ 
+      Out( m2 ), 
+      St_B_2($B, $A, skB, pkA, sA_in, nA_in, gx_in, ~nB, ~y, k1, k2, kA, kB, macA, macB, H_prime, m1, m2, 'true') 
+    ]
+
+rule Resp_B_2_WithCookie:
+    let
+        m1 = <~ck, sA_in, nA_in, gx_in> 
+        m2 = <~sB, ~nB, 'g'^~y>
+        k1 = KDF(gx_in^~y, <nA_in, ~nB>, '1')
+        k2 = KDF(gx_in^~y, <nA_in, ~nB>, '2')
+        kA = KDF(gx_in^~y, <nA_in, ~nB>, '3')
+        kB = KDF(gx_in^~y, <nA_in, ~nB>, '4')
+
+        macA = MAC(pkA, kA)
+        macB = MAC(pk(skB), kB)
+
+        h1 = H(~ck, Nil)
+        h2 = H(sA_in, h1)
+        h3 = H(nA_in, h2)
+        h4 = H(gx_in, h3)
+        h5 = H(~nB, h4)
+        H_prime = H(macA, h5)
+    in
+    [ 
+      St_B_1($B, $A, skB, pkA, m1_prime, ~ck),
+      In( 'true' ), // withCookie boolean flag
+      In( <~ck, sA_in, nA_in, gx_in> ), // Must match ck
+      Fr(~y), Fr(~nB), Fr(~sB) 
+    ]
+  --[ 
+      Neq($A, $B), Neq(gx_in, 'g'), NotCol(gx_in),
+      InitB($B, $A, <nA_in, ~nB>, <m1, ~nB>, H_prime) 
+    ]->
+    [ 
+      Out( m2 ), 
+      St_B_2($B, $A, skB, pkA, sA_in, nA_in, gx_in, ~nB, ~y, k1, k2, kA, kB, macA, macB, H_prime, m1, m2, 'false') 
+    ]
+
+rule Resp_B_3:
+    let
+        hB1 = H(~sB, Nil)
+        hB2 = H(~nB, hB1)
+        hB3 = H('g'^~y, hB2)
+        hB4 = H(nA, hB3)
+        hB_prime = H(macB, hB4)
+        sigB = sign(hB_prime, skB)
+    in
+    [ 
+      St_B_2($B, $A, skB, pkA, sA, nA, gx, ~nB, ~y, k1, k2, kA, kB, macA, macB, H_prime, m1, m2, cookie_status),
+      In( senc(<pkA, sigA>, k1) )
+    ]
+  --[ 
+      Eq(verify(sigA, H_prime, pkA), true),
+      AcceptB($B, $A, <nA, ~nB>, <m1, ~nB>, H_prime, H_prime),
+      AcceptB2($B, $A, sA),
+      SessionKeyB($B, $A, k1),
+      SanityB(cookie_status, <m1, m2>) 
+    ]->
+    [ 
+      Out( senc(<pk(skB), sigB>, k2) ) 
+    ]
+
+restriction Equality:
+    "All x y #i. Eq(x,y) @ #i ==> x = y"
+
+restriction Inequality:
+    "All x y #i. Neq(x,y) @ #i ==> not(x = y)"
+
+
+lemma type_flaw_agreement:
+    "All B A sA #i. AcceptB2(B, A, sA) @ #i 
+     ==> (Ex #j. InitA2(A, sA) @ #j & #j < #i) 
+         | (Ex #r. Dishonest(A) @ #r) 
+         | (Ex #r. Dishonest(B) @ #r)"
+
+lemma agreement_m1_m2_noCol:
+    "All B A x y t h #i. AcceptB(B, A, x, y, t, h) @ #i 
+     ==> (Ex B_prime x_prime y_prime h_prime #j. 
+            InitA(A, B_prime, x_prime, y_prime, t, h_prime) @ #j & #j < #i) 
+         | (Ex #r. Dishonest(A) @ #r) 
+         | (Ex #r. Dishonest(B) @ #r)"
+
+lemma agreement_hash_col:
+    "All B A x y t h #i. AcceptB(B, A, x, y, t, h) @ #i 
+     ==> (Ex B_prime x_prime y_prime t_prime #j. 
+            InitA(A, B_prime, x_prime, y_prime, t_prime, h) @ #j & #j < #i) 
+         | (Ex #r. Dishonest(A) @ #r) 
+         | (Ex #r. Dishonest(B) @ #r)"
+
+lemma sanity_A_true:
+    exists-trace "Ex x #i. SanityA('true', x) @ #i"
+    
+lemma sanity_A_false:
+    exists-trace "Ex x #i. SanityA('false', x) @ #i"
+    
+lemma sanity_B_true:
+    exists-trace "Ex x #i. SanityB('true', x) @ #i"
+    
+lemma sanity_B_false:
+    exists-trace "Ex x #i. SanityB('false', x) @ #i"
+
+end

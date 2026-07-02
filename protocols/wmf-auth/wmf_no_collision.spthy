@@ -1,0 +1,59 @@
+theory WMF_Auth_No_Collision
+begin
+
+builtins: symmetric-encryption
+functions: H/2, Nil/0
+
+restriction Equality:
+    "All x y #i. Eq(x,y) @ #i ==> x = y"
+
+// --- SYSTEM SETUP --- //
+rule System_Setup:
+    [ In(M), Fr(~Kas), Fr(~Ksb) ]
+  --[ ]->
+    [ 
+      St_A(~Kas, M), 
+      St_S(~Kas, ~Ksb), 
+      St_B(~Ksb, M) 
+    ]
+
+// --- PROTOCOL ROLES --- //
+rule Process_A:
+    let
+        h1 = H(M, Nil)
+        h = H(~Kab, h1)
+    in
+    [ St_A(~Kas, M), Fr(~Kab) ]
+  --[ WmfTagSent(h) ]->
+    [ 
+      Out(senc(~Kab, ~Kas)), 
+      Out(senc(M, ~Kab)), 
+      Out(h), 
+      !WmfTags(h) 
+    ]
+
+rule Process_S:
+    [ St_S(~Kas, ~Ksb), In(senc(Kab, ~Kas)) ]
+  --[ ]->
+    [ Out(senc(Kab, ~Ksb)) ]
+
+rule Process_B:
+    [ 
+      St_B(~Ksb, M), 
+      In(senc(Kab, ~Ksb)), 
+      In(senc(w, Kab)), 
+      In(hin), 
+      !WmfTags(hs) 
+    ]
+  --[ 
+      Eq(hin, hs), 
+      WmfTagAccepted(hin) 
+    ]->
+    [ Out(w) ]
+
+// --- SECURITY GOALS --- //
+lemma wmf_tag_unforgeability:
+    "All h #i. WmfTagAccepted(h) @ #i 
+     ==> (Ex #j. WmfTagSent(h) @ #j & #j < #i)"
+
+end

@@ -1,0 +1,178 @@
+theory IKEv2_Full_Collision
+begin
+
+builtins: diffie-hellman, symmetric-encryption, signing
+functions: H/2, Nil/0, MAC/2, KDF/3, CPcol1/2, CPcol2/2
+
+equations:
+    H(CPcol1(h1, h2), h1) = H(CPcol2(h1, h2), h2)
+
+rule Generate_Collision_Prefixes:
+    [ In(p1), In(p2) ]
+  --[ GenCol() ]->
+    [ Out(CPcol1(H(p1, Nil), H(p2, Nil))), Out(CPcol2(H(p1, Nil), H(p2, Nil))) ]
+
+restriction One_Collision_Only:
+    "All #i #j. GenCol() @ #i & GenCol() @ #j ==> #i = #j"
+
+rule Register_pk:
+    [ Fr(~sk) ]
+  --[ KeyGen($A) ]->
+    [ !Ltk($A, ~sk), !Pk($A, pk(~sk)), Out(pk(~sk)) ]
+
+rule Reveal_ltk:
+    [ !Ltk($A, sk) ]
+  --[ Dishonest($A) ]->
+    [ Out(sk) ]
+
+rule Init_A_1:
+    [ Fr(~x), Fr(~nA), Fr(~SA_A), Fr(~infoA), !Ltk($A, skA), !Pk($B, pkB) ]
+  --[ Neq($A, $B) ]->
+    [
+      Out(<'SA_INIT', ~SA_A, 'g'^~x, ~nA, ~infoA>),
+      St_A_1($A, $B, skA, pkB, ~x, ~nA, ~SA_A, ~infoA)
+    ]
+
+rule Init_A_2:
+    let
+        m1 = <'SA_INIT', ck, ~SA_A, 'g'^~x, ~nA, ~infoA>
+        m2 = <'SA_INIT', SA_B, gy, nB, infoB>
+        
+        k1 = KDF(gy^~x, <~nA, nB>, '1')
+        k2 = KDF(gy^~x, <~nA, nB>, '2')
+        kA = KDF(gy^~x, <~nA, nB>, '3')
+        kB = KDF(gy^~x, <~nA, nB>, '4')
+        
+        macA = MAC(pk(skA), kA)
+        
+        // OPTIMIZATION: Strict Tuple Hashing (Mirrors buildH)
+        hA = H(<m1, <nB, macA>>, Nil)
+        
+        cipher = senc(<'AUTH', pk(skA), sign(hA, skA)>, k1)
+    in
+    [
+      St_A_1($A, $B, skA, pkB, ~x, ~nA, ~SA_A, ~infoA),
+      In(<'SA_INIT', ck>),
+      In(m2)
+    ]
+  --[
+      Neq($A, $B), Neq(gy, 'g'),
+      InitA($A, $B, <~nA, nB>, <m1, m2>),
+      InitA2($A, $B, <~nA, nB>, <m1, m2>, hA)
+    ]->
+    [
+      Out(m1),
+      Out(cipher),
+      St_A_2($A, $B, skA, pkB, ~x, ~nA, nB, k1, k2, kB, m1, m2)
+    ]
+
+rule Init_A_3:
+    let
+        macB = MAC(pkB, kB)
+        
+        // OPTIMIZATION: Strict Tuple Hashing
+        hB = H(<m2, <~nA, macB>>, Nil)
+    in
+    [
+      St_A_2($A, $B, skA, pkB, ~x, ~nA, nB, k1, k2, kB, m1, m2),
+      In(senc(<'AUTH', pkB, sm>, k2))
+    ]
+  --[
+      Eq(verify(sm, hB, pkB), true),
+      AcceptA($A, $B, <~nA, nB>, sm),
+      SessionKeyA($A, $B, k1),
+      SanityA(<m1, m2>)
+    ]->
+    [ ]
+
+rule Resp_B_1:
+    [ In(<'SA_INIT', SA_A, gx, nA, infoA>), Fr(~ck), !Ltk($B, skB), !Pk($A, pkA) ]
+  --[ Neq($A, $B) ]->
+    [
+      Out(<'SA_INIT', ~ck>),
+      St_B_1($B, $A, skB, pkA, SA_A, gx, nA, infoA, ~ck)
+    ]
+
+rule Resp_B_2:
+    let
+        m1 = <'SA_INIT', ck, SA_A, gx, nA, infoA>
+        m2 = <'SA_INIT', ~SA_B, 'g'^~y, ~nB, ~infoB>
+    in
+    [
+      St_B_1($B, $A, skB, pkA, SA_A, gx, nA, infoA, ck),
+      In(m1),
+      Fr(~SA_B), Fr(~y), Fr(~nB), Fr(~infoB)
+    ]
+  --[ Neq($A, $B), Neq(gx, 'g') ]->
+    [
+      Out(m2),
+      St_B_2($B, $A, skB, pkA, ck, SA_A, gx, nA, infoA, ~SA_B, ~y, ~nB, ~infoB, m1, m2)
+    ]
+
+rule Resp_B_3:
+    let
+        k1 = KDF(gx^~y, <nA, ~nB>, '1')
+        k2 = KDF(gx^~y, <nA, ~nB>, '2')
+        kA = KDF(gx^~y, <nA, ~nB>, '3')
+        kB = KDF(gx^~y, <nA, ~nB>, '4')
+        
+        macA = MAC(pkA, kA)
+        macB = MAC(pk(skB), kB)
+        
+        // OPTIMIZATION: Strict Tuple Hashing
+        hA = H(<m1, <~nB, macA>>, Nil)
+        hB = H(<m2, <nA, macB>>, Nil)
+        
+        cipher = senc(<'AUTH', pk(skB), sign(hB, skB)>, k2)
+    in
+    [
+      St_B_2($B, $A, skB, pkA, ck, SA_A, gx, nA, infoA, SA_B, ~y, ~nB, infoB, m1, m2),
+      In(senc(<'AUTH', pkA, sm>, k1))
+    ]
+  --[
+      Eq(verify(sm, hA, pkA), true),
+      InitB($B, $A, <nA, ~nB>, hA),
+      AcceptB($B, $A, <nA, ~nB>, <m1, m2>),
+      AcceptB2($B, $A, <nA, ~nB>, <m1, m2>, sm),
+      SessionKeyB($B, $A, k2),
+      SanityB(<m1, m2>)
+    ]->
+    [ Out(cipher) ]
+
+restriction Equality:
+    "All x y #i. Eq(x,y) @ #i ==> x = y"
+
+restriction Inequality:
+    "All x y #i. Neq(x,y) @ #i ==> not(x = y)"
+
+lemma agreement_B_A_structural:
+    "All B A x y #i. AcceptB(B, A, x, y) @ #i ==> (Ex y_prime #j. InitA(A, B, x, y_prime) @ #j & #j < #i) | (Ex #r. Dishonest(A) @ #r) | (Ex #r. Dishonest(B) @ #r)"
+
+lemma agreement_A_B_structural:
+    "All A B x y #i. AcceptA(A, B, x, y) @ #i ==> (Ex x_prime #j. InitB(B, A, x_prime, y) @ #j & #j < #i) | (Ex #r. Dishonest(A) @ #r) | (Ex #r. Dishonest(B) @ #r)"
+
+lemma auth_B_to_A:
+    "All B A x y #i. AcceptB(B, A, x, y) @ #i ==> (Ex B_prime y_prime #j. InitA(A, B_prime, x, y_prime) @ #j & #j < #i) | (Ex #r. Dishonest(A) @ #r) | (Ex #r. Dishonest(B) @ #r)"
+
+lemma transcript_agreement_B_A:
+    "All B A x y #i. AcceptB(B, A, x, y) @ #i ==> (Ex y_prime #j. InitA(A, B, x, y_prime) @ #j & y = y_prime) | (Ex #r. Dishonest(A) @ #r) | (Ex #r. Dishonest(B) @ #r)"
+
+lemma transcript_agreement_A_B:
+    "All A B x y #i. AcceptA(A, B, x, y) @ #i ==> (Ex x_prime #j. InitB(B, A, x_prime, y) @ #j & #j < #i) | (Ex #r. Dishonest(A) @ #r) | (Ex #r. Dishonest(B) @ #r)"
+
+lemma session_key_secrecy_A:
+    "All A B k #i. SessionKeyA(A, B, k) @ #i ==> not(Ex #j. K(k) @ #j) | (Ex #r. Dishonest(A) @ #r) | (Ex #r. Dishonest(B) @ #r)"
+
+lemma session_key_secrecy_B:
+    "All B A k #i. SessionKeyB(B, A, k) @ #i ==> not(Ex #j. K(k) @ #j) | (Ex #r. Dishonest(A) @ #r) | (Ex #r. Dishonest(B) @ #r)"
+
+lemma hash_agreement_acceptB2:
+    "All B A x y h #i. AcceptB2(B, A, x, y, h) @ #i ==> (Ex B_prime x_prime y_prime h_prime #j. InitA2(A, B_prime, x_prime, y_prime, h_prime) @ #j & h = h_prime) | (Ex #r. Dishonest(A) @ #r) | (Ex #r. Dishonest(B) @ #r)"
+
+lemma sanity_A:
+    exists-trace "Ex x #i. SanityA(x) @ #i"
+
+lemma sanity_B:
+    exists-trace "Ex x #i. SanityB(x) @ #i"
+
+end

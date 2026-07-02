@@ -1,0 +1,40 @@
+theory MACs_No_Collision
+begin
+
+functions: H/2, Nil/0
+
+rule Setup_Key:
+    [ Fr(~k) ]
+  --[ ]->
+    [ !Key(~k) ]
+
+rule Sender:
+    let
+        // Explicit structural MDH equivalent
+        h1 = H(~k, Nil)
+        tag = H(x, h1)
+    in
+    [ !Key(~k), In(x) ]
+  --[ MacSent(x, tag) ]->
+    [ Out( <x, tag> ) ]
+
+rule Receiver:
+    let
+        h1 = H(~k, Nil)
+        expected = H(x, h1)
+    in
+    [ !Key(~k), In( <x, m> ) ]
+  --[ 
+      Eq(expected, m),
+      MacAccepted(x, m) 
+    ]->
+    [ Out(x) ]
+
+restriction Equality:
+    "All x y #i. Eq(x,y) @ #i ==> x = y"
+
+lemma mac_unforgeability:
+    "All x m #i. MacAccepted(x, m) @ #i
+     ==> (Ex #j. MacSent(x, m) @ #j & #j < #i)"
+
+end

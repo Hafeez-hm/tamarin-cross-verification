@@ -1,73 +1,74 @@
 theory Sigma_Protocol_No_Collision
 begin
 
-/* 
-Time Complexity: Reachability analysis for unbounded verification is inherently undecidable; bounded verification is NP-complete. 
-Space Complexity: O(V + E) memory utilization, where V is the number of symbolic state vertices and E represents the transition edges generated during the backward-search graph exploration.
-*/
-
 builtins: diffie-hellman, signing
-functions: mac/2, buildH/1, getmsg/1
+functions: H/2, Nil/0, mac/2, getmsg/1
 
-// Replicating getmsg logic
-equations: getmsg(sign(m, sk)) = m
+equations: 
+    getmsg(sign(m, sk)) = m
 
-// --- 1. PKI & Key Generation --- //
-// Corresponds to your System macro: ! (new sk:t_sk; out(c, pk(sk)); insert Keys(sk))
 rule Register_pk:
     [ Fr(~sk) ]
   --[ KeyGen($A) ]->
     [ !Ltk($A, ~sk), !Pk($A, pk(~sk)), Out(pk(~sk)) ]
 
-// Corresponds to event Dishonest(pk(skA)); out(c,skA)
 rule Reveal_ltk:
-    [ !Ltk($A, ~sk) ]
+    [ !Ltk($A, sk) ]
   --[ Dishonest($A) ]->
-    [ Out(~sk) ]
+    [ Out(sk) ]
 
-// --- 2. Protocol Roles --- //
-
-// Initiator Step 1: Send m1
 rule Init_1:
     [ Fr(~x), Fr(~infoA), !Ltk($A, skA), !Pk($B, pkB) ]
-  --[ ]->
+  --[ Neq($A, $B) ]->
     [ 
       Out( <'g'^~x, ~infoA> ), 
       St_Init_1($A, $B, skA, pkB, ~x, ~infoA) 
     ]
 
-// Responder Step 1: Receive m1, Send m2
 rule Resp_1:
     [ In( <gx, infoA> ), Fr(~y), Fr(~infoB), !Ltk($B, skB), !Pk($A, pkA) ]
-  --[ InitB($B, $A, < <gx, infoA>, <'g'^~y, ~infoB> >) ]->
+  --[ 
+      Neq($A, $B), Neq(gx, 'g'), // Mirrors ProVerif: if pk(skB) <> pkA and gx <> g
+      InitB($B, $A, < <gx, infoA>, <'g'^~y, ~infoB> >) 
+    ]->
     [ 
       Out( <'g'^~y, ~infoB> ), 
       St_Resp_1($B, $A, skB, pkA, gx, infoA, ~y, ~infoB) 
     ]
 
-// Initiator Step 2: Receive m2, Send signatures/MACs
 rule Init_2:
     let
         gy = gy_in
         k = gy^~x
-        transcript = <'g'^~x, infoA, gy, infoB>
-        ht = buildH(transcript)
+        
+        // Exact structural equivalent of buildH without collision vulnerabilities
+        h1 = H('g'^~x, Nil)
+        h2 = H(infoA, h1)
+        h3 = H(gy, h2)
+        ht = H(infoB, h3)
+        
         sigA = sign(<ht, 'init'>, skA)
         macA = mac(pk(skA), k)
     in
     [ St_Init_1($A, $B, skA, pkB, ~x, infoA), In( <gy_in, infoB> ) ]
-  --[ InitA($A, $B, < <'g'^~x, infoA>, <gy_in, infoB> >) ]->
+  --[ 
+      Neq($A, $B), Neq(gy_in, 'g'), // Mirrors ProVerif: if pk(skB) <> pkA and gy <> g
+      InitA($A, $B, < <'g'^~x, infoA>, <gy_in, infoB> >) 
+    ]->
     [ 
       Out( <sigA, macA> ), 
-      St_Init_2($A, $B, skA, pkB, ~x, infoA, gy, infoB, k, transcript, ht) 
+      St_Init_2($A, $B, skA, pkB, ~x, infoA, gy, infoB, k, ht) 
     ]
 
-// Responder Step 2: Receive A's signature, verify, Send B's signature
 rule Resp_2:
     let
         k = gx^~y
-        transcript = <gx, infoA, 'g'^~y, ~infoB>
-        ht = buildH(transcript)
+        
+        h1 = H(gx, Nil)
+        h2 = H(infoA, h1)
+        h3 = H('g'^~y, h2)
+        ht = H(~infoB, h3)
+        
         sigB = sign(<ht, 'resp'>, skB)
         macB = mac(pk(skB), k)
     in
@@ -76,7 +77,7 @@ rule Resp_2:
       In( <sigA, macA_in> ) 
     ]
   --[ 
-      Eq(verify(sigA, <ht, 'init'>, pkA), true), // signCheck equivalent
+      Eq(verify(sigA, <ht, 'init'>, pkA), true),
       Eq(macA_in, mac(pkA, k)),
       AcceptB($B, $A, < <gx, infoA>, <'g'^~y, ~infoB> >),
       SessionKeyB($B, $A, k)
@@ -85,47 +86,35 @@ rule Resp_2:
       Out( <sigB, macB> ) 
     ]
 
-// Initiator Step 3: Receive B's signature, verify, Accept
 rule Init_3:
     [ 
-      St_Init_2($A, $B, skA, pkB, ~x, infoA, gy, infoB, k, transcript, ht),
+      St_Init_2($A, $B, skA, pkB, ~x, infoA, gy, infoB, k, ht),
       In( <sigB, macB_in> )
     ]
   --[ 
-      Eq(verify(sigB, <ht, 'resp'>, pkB), true), // signCheck equivalent
+      Eq(verify(sigB, <ht, 'resp'>, pkB), true),
       Eq(macB_in, mac(pkB, k)),
       AcceptA($A, $B, < <'g'^~x, infoA>, <gy, infoB> >),
       SessionKeyA($A, $B, k)
     ]->
     [ ]
 
-// --- 3. Restriction for Equality Checks --- //
-// Tamarin needs an explicit restriction to enforce the 'if m = mac(...)' checks
 restriction Equality:
-    "All x y #i. Eq(x,y) @i ==> x = y"
+    "All x y #i. Eq(x,y) @ #i ==> x = y"
 
-// --- 4. Security Goals (Lemmas mapping your ProVerif Queries) --- //
+restriction Inequality:
+    "All x y #i. Neq(x,y) @ #i ==> not(x = y)"
 
-// Sanity check: executability
 lemma executable:
     exists-trace
     "Ex B A x #i. AcceptB(B, A, x) @ #i"
 
-// Agreement on (A,B,m1,m2) from B to A (holds)
-lemma agreement_B_to_A:
-    "All A B x #i. AcceptA(A, B, x) @ #i 
-     ==> (Ex #j. InitB(B, A, x) @ #j & #j < #i) 
-         | (Ex #r. Dishonest(A) @ #r) 
-         | (Ex #r. Dishonest(B) @ #r)"
-
-// Agreement on (A,m1,m2) and authentication of B from A to B (holds)
-lemma agreement_A_to_B:
+lemma agreement_strict_A_to_B:
     "All B A x #i. AcceptB(B, A, x) @ #i 
-     ==> (Ex B_prime #j. InitA(A, B_prime, x) @ #j & #j < #i) 
+     ==> (Ex #j. InitA(A, B, x) @ #j & #j < #i) 
          | (Ex #r. Dishonest(A) @ #r) 
          | (Ex #r. Dishonest(B) @ #r)"
 
-// Session key secrecy
 lemma session_key_secrecy_A:
     "All A B k #i. SessionKeyA(A, B, k) @ #i 
      ==> not (Ex #j. K(k) @ #j) 
@@ -135,6 +124,18 @@ lemma session_key_secrecy_A:
 lemma session_key_secrecy_B:
     "All B A k #i. SessionKeyB(B, A, k) @ #i 
      ==> not (Ex #j. K(k) @ #j) 
+         | (Ex #r. Dishonest(A) @ #r) 
+         | (Ex #r. Dishonest(B) @ #r)"
+
+lemma agreement_B_to_A:
+    "All A B x #i. AcceptA(A, B, x) @ #i 
+     ==> (Ex #j. InitB(B, A, x) @ #j & #j < #i) 
+         | (Ex #r. Dishonest(A) @ #r) 
+         | (Ex #r. Dishonest(B) @ #r)"
+
+lemma agreement_A_to_B:
+    "All B A x #i. AcceptB(B, A, x) @ #i 
+     ==> (Ex B_prime #j. InitA(A, B_prime, x) @ #j & #j < #i) 
          | (Ex #r. Dishonest(A) @ #r) 
          | (Ex #r. Dishonest(B) @ #r)"
 
