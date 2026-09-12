@@ -23,9 +23,9 @@ The workspace is organized to keep protocol theories, evaluation scripts, and co
 │   ├── ike_full/     # Full IKEv2 theory files and scripts
 │   ├── ike_simplified/        # Simplified IKEv2 theory files and scripts
 │   ├── macs/         # Foundational MACs theory files and scripts
-│   ├── proba_pk/     # Probabilistic PK theory files and scripts
+│   ├── proba/        # Probabilistic PK theory files and scripts
 │   ├── sigma/        # Sigma protocol theory files and scripts
-│   └── wmf/          # Wide Mouth Frog theory files and scripts
+│   └── wmf-auth/     # Wide Mouth Frog theory files and scripts
 ├── Dockerfile        # Container environment configuration
 └── README.md         # This documentation file
 ```
@@ -77,7 +77,7 @@ Launch the interactive container and mount your local `protocols` directory so t
 ```bash
 docker run -it \
   -v $(pwd)/protocols:/root/protocols \
-  hafeez2003/tamarin-cross-verification:v1.0 \
+   hafeez2003/tamarin-cross-verification:v1.0 \
   /bin/bash
 ```
 
@@ -85,10 +85,12 @@ docker run -it \
 
 ### 3. Navigate to a Protocol Directory
 
+When the container starts, it is already in `/root/protocols`. From there, move into the protocol you want to verify.
+
 For example, to verify the Sigma protocol:
 
 ```bash
-cd /root/protocols/sigma
+cd /sigma
 ```
 
 ---
